@@ -1,7 +1,7 @@
 // Global variables
 let currentSCORMData = null;
 let currentFilename = null;
-let currentSavedFilename = null;
+let currentPackageId = null;
 
 // DOM elements
 const uploadArea = document.getElementById('uploadArea');
@@ -103,7 +103,7 @@ function handleFileUpload(file) {
             const response = JSON.parse(xhr.responseText);
             currentSCORMData = response.scormData;
             currentFilename = response.filename;
-            currentSavedFilename = response.savedFilename;
+            currentPackageId = response.packageId;
             displayResults(response);
             showSuccess('SCORM file uploaded and analyzed successfully!');
         } else {
@@ -271,7 +271,7 @@ function formatFileSize(bytes) {
 
 // View file content
 function viewFile(filePath) {
-    const url = `/content/${currentSavedFilename}/${filePath}`;
+    const url = `/content/${currentPackageId}/${filePath}`;
     contentFrame.src = url;
     contentViewer.style.display = 'flex';
 }
@@ -303,13 +303,13 @@ function viewContent() {
 
 // Download package
 function downloadPackage() {
-    if (!currentFilename || !currentSavedFilename) {
+    if (!currentFilename || !currentPackageId) {
         showError('No package to download');
         return;
     }
 
     const link = document.createElement('a');
-    link.href = `/content/${currentSavedFilename}/`;
+    link.href = `/content/${currentPackageId}/`;
     link.download = currentFilename;
     link.click();
 }

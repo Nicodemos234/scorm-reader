@@ -8,27 +8,17 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3007;
 
+// In-memory storage for uploaded SCORM packages
+const scormPackages = new Map();
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = 'uploads';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
-
+// Configure multer for in-memory file uploads
 const upload = multer({ 
-  storage: storage,
+  storage: multer.memoryStorage(), // Store files in memory instead of disk
   fileFilter: (req, file, cb) => {
     // Accept zip files and other common SCORM file extensions
     const allowedExtensions = ['.zip', '.scorm', '.pif'];
@@ -46,9 +36,9 @@ const upload = multer({
 });
 
 // Function to extract and analyze SCORM package
-function analyzeSCORMPackage(filePath) {
+function analyzeSCORMPackage(buffer) {
   try {
-    const zip = new AdmZip(filePath);
+    const zip = new AdmZip(buffer);
     const entries = zip.getEntries();
     
     const scormData = {
@@ -269,15 +259,26 @@ app.post('/upload', upload.single('scormFile'), (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    console.log('File uploaded:', req.file.filename);
+    console.log('File uploaded:', req.file.originalname);
     
-    // Analyze the SCORM package
-    const scormData = analyzeSCORMPackage(req.file.path);
+    // Generate a unique ID for this package
+    const packageId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+    
+    // Analyze the SCORM package from buffer
+    const scormData = analyzeSCORMPackage(req.file.buffer);
+    
+    // Store the package in memory
+    scormPackages.set(packageId, {
+      filename: req.file.originalname,
+      buffer: req.file.buffer,
+      scormData: scormData,
+      uploadedAt: new Date()
+    });
     
     res.json({
       success: true,
       filename: req.file.originalname,
-      savedFilename: req.file.filename, // The actual filename used to save the file
+      packageId: packageId, // Use package ID instead of filename
       scormData: scormData,
       message: 'SCORM file uploaded and analyzed successfully'
     });
@@ -292,17 +293,19 @@ app.post('/upload', upload.single('scormFile'), (req, res) => {
 });
 
 // Serve extracted SCORM content
-app.get('/content/:filename/*', (req, res) => {
+app.get('/content/:packageId/*', (req, res) => {
   try {
-    const filename = req.params.filename;
+    const packageId = req.params.packageId;
     const filePath = req.params[0]; // The rest of the path
-    const uploadPath = path.join(__dirname, 'uploads', filename);
     
-    if (!fs.existsSync(uploadPath)) {
+    // Get the package from memory
+    const packageData = scormPackages.get(packageId);
+    
+    if (!packageData) {
       return res.status(404).json({ error: 'SCORM package not found' });
     }
 
-    const zip = new AdmZip(uploadPath);
+    const zip = new AdmZip(packageData.buffer);
     const entry = zip.getEntry(filePath);
     
     if (!entry) {
@@ -357,17 +360,13 @@ app.get('/content/:filename/*', (req, res) => {
   }
 });
 
-// Get list of uploaded files
+// Get list of uploaded packages
 app.get('/files', (req, res) => {
   try {
-    const uploadDir = 'uploads';
-    if (!fs.existsSync(uploadDir)) {
-      return res.json({ files: [] });
-    }
-
-    const files = fs.readdirSync(uploadDir).map(filename => ({
-      name: filename,
-      uploadDate: fs.statSync(path.join(uploadDir, filename)).mtime
+    const files = Array.from(scormPackages.entries()).map(([packageId, data]) => ({
+      packageId: packageId,
+      name: data.filename,
+      uploadDate: data.uploadedAt
     }));
 
     res.json({ files });
@@ -375,6 +374,19 @@ app.get('/files', (req, res) => {
     res.status(500).json({ error: 'Error reading files' });
   }
 });
+
+// Cleanup old packages (run every hour)
+setInterval(() => {
+  const now = new Date();
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  
+  for (const [packageId, data] of scormPackages.entries()) {
+    if (data.uploadedAt < oneHourAgo) {
+      scormPackages.delete(packageId);
+      console.log('Cleaned up old package:', packageId);
+    }
+  }
+}, 60 * 60 * 1000); // Run every hour
 
 // Error handling middleware
 app.use((error, req, res, next) => {
