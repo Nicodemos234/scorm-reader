@@ -4,9 +4,98 @@ const AdmZip = require('adm-zip');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
+const https = require('https');
+const { execSync } = require('child_process');
+const os = require('os');
 
 const app = express();
 const PORT = process.env.PORT || 3007;
+const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+
+// Function to get local IP address
+function getLocalIPAddress() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // Skip over non-IPv4 and internal (i.e. 127.0.0.1) addresses
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
+// Function to generate self-signed certificates for development
+function generateSelfSignedCert() {
+  const certDir = path.join(__dirname, 'certs');
+  
+  // Create certs directory if it doesn't exist
+  if (!fs.existsSync(certDir)) {
+    fs.mkdirSync(certDir, { recursive: true });
+  }
+  
+  const keyPath = path.join(certDir, 'key.pem');
+  const certPath = path.join(certDir, 'cert.pem');
+  const configPath = path.join(certDir, 'cert.conf');
+  
+  // Check if certificates already exist
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    return { keyPath, certPath };
+  }
+  
+  try {
+    console.log('Generating self-signed certificate for HTTPS...');
+    
+    // Get local IP address
+    const localIP = getLocalIPAddress();
+    console.log(`Detected local IP: ${localIP}`);
+    
+    // Generate private key
+    execSync(`openssl genrsa -out "${keyPath}" 2048`, { stdio: 'inherit' });
+    
+    // Create OpenSSL config file with Subject Alternative Name (SAN)
+    const configContent = `[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C = US
+ST = State
+L = City
+O = Organization
+CN = localhost
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+DNS.2 = *.localhost
+IP.1 = 127.0.0.1
+IP.2 = ${localIP}`;
+    
+    fs.writeFileSync(configPath, configContent);
+    
+    // Generate certificate with SAN
+    execSync(`openssl req -new -x509 -key "${keyPath}" -out "${certPath}" -days 365 -config "${configPath}" -extensions v3_req`, { stdio: 'inherit' });
+    
+    // Clean up config file
+    fs.unlinkSync(configPath);
+    
+    console.log('Self-signed certificate generated successfully!');
+    console.log(`Certificate includes: localhost, 127.0.0.1, and ${localIP}`);
+    return { keyPath, certPath };
+  } catch (error) {
+    console.error('Error generating self-signed certificate:', error.message);
+    console.log('Make sure OpenSSL is installed on your system.');
+    return null;
+  }
+}
 
 // In-memory storage for uploaded SCORM packages
 const scormPackages = new Map();
@@ -399,6 +488,37 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: error.message });
 });
 
-app.listen(PORT, () => {
-  console.log(`SCORM Reader server running on http://localhost:${PORT}`);
+// Get local IP for display
+const localIP = getLocalIPAddress();
+
+// Start HTTP server
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`SCORM Reader server running on:`);
+  console.log(`  HTTP:  http://localhost:${PORT}`);
+  console.log(`  HTTP:  http://${localIP}:${PORT}`);
 });
+
+// Start HTTPS server
+const certs = generateSelfSignedCert();
+if (certs) {
+  try {
+    const options = {
+      key: fs.readFileSync(certs.keyPath),
+      cert: fs.readFileSync(certs.certPath)
+    };
+    
+    https.createServer(options, app).listen(HTTPS_PORT, '0.0.0.0', () => {
+      console.log(`SCORM Reader HTTPS server running on:`);
+      console.log(`  HTTPS: https://localhost:${HTTPS_PORT}`);
+      console.log(`  HTTPS: https://${localIP}:${HTTPS_PORT}`);
+      console.log('');
+      console.log('Note: You may see a security warning in your browser due to the self-signed certificate.');
+      console.log('This is normal for development. Click "Advanced" and "Proceed to localhost" to continue.');
+    });
+  } catch (error) {
+    console.error('Error starting HTTPS server:', error.message);
+    console.log('HTTPS server not started. Only HTTP server is available.');
+  }
+} else {
+  console.log('HTTPS server not started. Only HTTP server is available.');
+}
