@@ -1,0 +1,392 @@
+const express = require('express');
+const multer = require('multer');
+const AdmZip = require('adm-zip');
+const path = require('path');
+const fs = require('fs');
+const cors = require('cors');
+
+const app = express();
+const PORT = process.env.PORT || 3007;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public'));
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = 'uploads';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  fileFilter: (req, file, cb) => {
+    // Accept zip files and other common SCORM file extensions
+    const allowedExtensions = ['.zip', '.scorm', '.pif'];
+    const fileExtension = path.extname(file.originalname).toLowerCase();
+    
+    if (allowedExtensions.includes(fileExtension)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only ZIP and SCORM files are allowed'), false);
+    }
+  },
+  limits: {
+    fileSize: 100 * 1024 * 1024 // 100MB limit
+  }
+});
+
+// Function to extract and analyze SCORM package
+function analyzeSCORMPackage(filePath) {
+  try {
+    const zip = new AdmZip(filePath);
+    const entries = zip.getEntries();
+    
+    const scormData = {
+      files: [],
+      manifest: null,
+      imsmanifest: null,
+      structure: {}
+    };
+
+    entries.forEach(entry => {
+      const fileName = entry.entryName;
+      scormData.files.push({
+        name: fileName,
+        size: entry.header.size,
+        isDirectory: entry.isDirectory
+      });
+
+      // Look for SCORM manifest file
+      if (fileName.toLowerCase() === 'imsmanifest.xml') {
+        try {
+          const manifestContent = entry.getData().toString('utf8');
+          scormData.imsmanifest = manifestContent;
+          scormData.manifest = parseManifest(manifestContent);
+        } catch (error) {
+          console.error('Error reading manifest:', error);
+        }
+      }
+    });
+
+    return scormData;
+  } catch (error) {
+    throw new Error(`Error analyzing SCORM package: ${error.message}`);
+  }
+}
+
+// Function to parse SCORM manifest
+function parseManifest(xmlContent) {
+  try {
+    // Simple XML parsing for manifest structure
+    const manifest = {
+      identifier: extractXmlValue(xmlContent, 'identifier'),
+      title: extractXmlValue(xmlContent, 'title'),
+      organizations: [],
+      resources: []
+    };
+
+    // Extract organizations
+    const orgMatches = xmlContent.match(/<organizations[^>]*>(.*?)<\/organizations>/gs);
+    if (orgMatches) {
+      orgMatches.forEach(orgMatch => {
+        const orgIdentifier = extractXmlValue(orgMatch, 'organization', 'identifier');
+        const orgTitle = extractXmlValue(orgMatch, 'organization', 'title');
+        manifest.organizations.push({
+          identifier: orgIdentifier,
+          title: orgTitle
+        });
+      });
+    }
+
+    // Extract resources
+    const resourceMatches = xmlContent.match(/<resource[^>]*>(.*?)<\/resource>/gs);
+    if (resourceMatches) {
+      resourceMatches.forEach(resourceMatch => {
+        const resourceId = extractXmlValue(resourceMatch, 'resource', 'identifier');
+        const resourceHref = extractXmlValue(resourceMatch, 'resource', 'href');
+        manifest.resources.push({
+          identifier: resourceId,
+          href: resourceHref
+        });
+      });
+    }
+
+    return manifest;
+  } catch (error) {
+    console.error('Error parsing manifest:', error);
+    return null;
+  }
+}
+
+// Helper function to extract XML values
+function extractXmlValue(xml, tag, attribute = null) {
+  const regex = new RegExp(`<${tag}[^>]*${attribute ? attribute + '="([^"]*)"' : '>([^<]*)<'}`, 'i');
+  const match = xml.match(regex);
+  return match ? match[1] : null;
+}
+
+// Serve main page
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Serve SCORM API for content
+app.get('/scorm-api.js', (req, res) => {
+  const scormAPI = `
+// Basic SCORM API Implementation
+var API = {
+  // SCORM API Version
+  version: "1.2",
+  
+  // Initialize the connection to the LMS
+  LMSInitialize: function(param) {
+    console.log('SCORM API: LMSInitialize called with:', param);
+    return "true";
+  },
+  
+  // Terminate the connection to the LMS
+  LMSFinish: function(param) {
+    console.log('SCORM API: LMSFinish called with:', param);
+    return "true";
+  },
+  
+  // Get a data value from the LMS
+  LMSGetValue: function(element) {
+    console.log('SCORM API: LMSGetValue called for:', element);
+    
+    // Return default values for common SCORM elements
+    switch(element) {
+      case "cmi.core.student_name":
+        return "SCORM Reader User";
+      case "cmi.core.student_id":
+        return "scorm-reader-user";
+      case "cmi.core.lesson_location":
+        return "";
+      case "cmi.core.credit":
+        return "credit";
+      case "cmi.core.lesson_status":
+        return "not attempted";
+      case "cmi.core.score.raw":
+        return "";
+      case "cmi.core.score.max":
+        return "";
+      case "cmi.core.score.min":
+        return "";
+      case "cmi.core.total_time":
+        return "PT0S";
+      case "cmi.core.entry":
+        return "";
+      case "cmi.core.exit":
+        return "";
+      case "cmi.suspend_data":
+        return "";
+      case "cmi.launch_data":
+        return "";
+      case "cmi.comments":
+        return "";
+      case "cmi.student_data.mastery_score":
+        return "";
+      case "cmi.student_data.max_time_allowed":
+        return "";
+      case "cmi.student_data.time_limit_action":
+        return "";
+      case "cmi.core.session_time":
+        return "PT0S";
+      default:
+        return "";
+    }
+  },
+  
+  // Set a data value in the LMS
+  LMSSetValue: function(element, value) {
+    console.log('SCORM API: LMSSetValue called for:', element, 'with value:', value);
+    
+    // Store the value (in a real LMS, this would be saved to the database)
+    if (!API.data) {
+      API.data = {};
+    }
+    API.data[element] = value;
+    
+    return "true";
+  },
+  
+  // Commit data to the LMS
+  LMSCommit: function(param) {
+    console.log('SCORM API: LMSCommit called with:', param);
+    return "true";
+  },
+  
+  // Get the last error that occurred
+  LMSGetLastError: function() {
+    console.log('SCORM API: LMSGetLastError called');
+    return "0"; // No error
+  },
+  
+  // Get the error string for a given error code
+  LMSGetErrorString: function(errorCode) {
+    console.log('SCORM API: LMSGetErrorString called for:', errorCode);
+    return "No Error";
+  },
+  
+  // Get diagnostic information about the last error
+  LMSGetDiagnostic: function(errorCode) {
+    console.log('SCORM API: LMSGetDiagnostic called for:', errorCode);
+    return "No Error";
+  }
+};
+
+// Make the API available globally
+if (typeof window !== 'undefined') {
+  window.API = API;
+  window.parent.API = API;
+  window.top.API = API;
+}
+
+// Also make it available as a CommonJS module if needed
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = API;
+}
+`;
+
+  res.set('Content-Type', 'application/javascript');
+  res.send(scormAPI);
+});
+
+// Upload endpoint
+app.post('/upload', upload.single('scormFile'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    console.log('File uploaded:', req.file.filename);
+    
+    // Analyze the SCORM package
+    const scormData = analyzeSCORMPackage(req.file.path);
+    
+    res.json({
+      success: true,
+      filename: req.file.originalname,
+      savedFilename: req.file.filename, // The actual filename used to save the file
+      scormData: scormData,
+      message: 'SCORM file uploaded and analyzed successfully'
+    });
+
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ 
+      error: 'Error processing SCORM file',
+      details: error.message 
+    });
+  }
+});
+
+// Serve extracted SCORM content
+app.get('/content/:filename/*', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const filePath = req.params[0]; // The rest of the path
+    const uploadPath = path.join(__dirname, 'uploads', filename);
+    
+    if (!fs.existsSync(uploadPath)) {
+      return res.status(404).json({ error: 'SCORM package not found' });
+    }
+
+    const zip = new AdmZip(uploadPath);
+    const entry = zip.getEntry(filePath);
+    
+    if (!entry) {
+      return res.status(404).json({ error: 'File not found in SCORM package' });
+    }
+
+    // Set appropriate content type
+    const ext = path.extname(filePath).toLowerCase();
+    const contentTypes = {
+      '.html': 'text/html',
+      '.htm': 'text/html',
+      '.css': 'text/css',
+      '.js': 'application/javascript',
+      '.json': 'application/json',
+      '.xml': 'application/xml',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml'
+    };
+
+    const contentType = contentTypes[ext] || 'application/octet-stream';
+    res.set('Content-Type', contentType);
+    
+    let content = entry.getData();
+    
+    // If it's an HTML file, inject the SCORM API script
+    if (ext === '.html' || ext === '.htm') {
+      let htmlContent = content.toString('utf8');
+      
+      // Inject SCORM API script before closing </head> tag or at the beginning of <body>
+      const scormScript = '<script src="/scorm-api.js"></script>';
+      
+      if (htmlContent.includes('</head>')) {
+        htmlContent = htmlContent.replace('</head>', `  ${scormScript}\n</head>`);
+      } else if (htmlContent.includes('<body')) {
+        htmlContent = htmlContent.replace('<body', `${scormScript}\n<body`);
+      } else {
+        // If no head or body tag, add at the beginning
+        htmlContent = `${scormScript}\n${htmlContent}`;
+      }
+      
+      content = Buffer.from(htmlContent, 'utf8');
+    }
+    
+    res.send(content);
+
+  } catch (error) {
+    console.error('Content serving error:', error);
+    res.status(500).json({ error: 'Error serving content' });
+  }
+});
+
+// Get list of uploaded files
+app.get('/files', (req, res) => {
+  try {
+    const uploadDir = 'uploads';
+    if (!fs.existsSync(uploadDir)) {
+      return res.json({ files: [] });
+    }
+
+    const files = fs.readdirSync(uploadDir).map(filename => ({
+      name: filename,
+      uploadDate: fs.statSync(path.join(uploadDir, filename)).mtime
+    }));
+
+    res.json({ files });
+  } catch (error) {
+    res.status(500).json({ error: 'Error reading files' });
+  }
+});
+
+// Error handling middleware
+app.use((error, req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'File too large. Maximum size is 100MB.' });
+    }
+  }
+  
+  res.status(500).json({ error: error.message });
+});
+
+app.listen(PORT, () => {
+  console.log(`SCORM Reader server running on http://localhost:${PORT}`);
+});

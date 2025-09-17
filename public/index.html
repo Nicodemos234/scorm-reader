@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SCORM Reader</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎓 SCORM Reader</h1>
+            <p>Upload and explore SCORM e-learning packages</p>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-content">
+                        <div class="upload-icon">📁</div>
+                        <h3>Drop your SCORM file here</h3>
+                        <p>or click to browse</p>
+                        <p class="file-types">Supported: .zip, .scorm, .pif</p>
+                    </div>
+                    <input type="file" id="fileInput" accept=".zip,.scorm,.pif" style="display: none;">
+                </div>
+                
+                <div class="upload-progress" id="uploadProgress" style="display: none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <p id="progressText">Uploading...</p>
+                </div>
+            </div>
+
+            <div class="results-section" id="resultsSection" style="display: none;">
+                <h2>📋 SCORM Package Analysis</h2>
+                <div class="package-info" id="packageInfo"></div>
+                
+                <div class="content-section">
+                    <h3>📚 Package Contents</h3>
+                    <div class="file-tree" id="fileTree"></div>
+                </div>
+
+                <div class="manifest-section" id="manifestSection" style="display: none;">
+                    <h3>📄 Manifest Information</h3>
+                    <div class="manifest-content" id="manifestContent"></div>
+                </div>
+
+                <div class="actions">
+                    <button class="btn btn-primary" id="viewContentBtn">🎯 View Content</button>
+                    <button class="btn btn-secondary" id="downloadBtn">💾 Download Package</button>
+                </div>
+            </div>
+
+            <div class="content-viewer" id="contentViewer" style="display: none;">
+                <div class="viewer-header">
+                    <h3>🎯 Content Viewer</h3>
+                    <button class="btn btn-close" id="closeViewer">✕</button>
+                </div>
+                <iframe id="contentFrame" src="about:blank"></iframe>
+            </div>
+        </main>
+
+        <footer>
+            <p>Built with Node.js and Express</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
